@@ -1,2 +1,0 @@
-manim>=0.18
-numpy
