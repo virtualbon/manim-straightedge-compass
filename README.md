@@ -16,7 +16,7 @@
 pip install manim
 
 # 安装本插件（在项目根目录）
-pip install pip install manim-straightedge-compass .
+pip install manim-straightedge-compass .
 ```
 
 不安装也可以使用：直接把 `manim_sc` 目录放进工程，或在示例脚本中
