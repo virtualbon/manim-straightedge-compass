@@ -1,292 +1,202 @@
-"""Scene base class providing the straightedge-and-compass animation API."""
-
+"""High-level scene base class that turns classical compass-and-straightedge
+constructions into short, declarative animations."""
 from __future__ import annotations
 
 import numpy as np
 from manim import (
-    Scene,
-    Line,
-    Circle,
-    Arc,
-    FadeIn,
-    FadeOut,
-    Create,
-    GrowFromCenter,
-    Group,
-    always_redraw,
-    ValueTracker,
-    DashedVMobject,
-    TAU,
-    PI,
+    Scene, Arc, Line, TAU, FadeIn, FadeOut, Write, AnimationGroup,
+    ORIGIN, UP, DOWN, LEFT, linear, Text,
 )
 
-from . import geometry as geo
-from .marks import MarkedPoint
-from .tools import (
-    Straightedge,
-    Compass,
-    make_compass_at,
-    static_arc,
-    RULER_COLOR,
-    COMPASS_COLOR,
-    CONSTRUCTION_COLOR,
-    RESULT_COLOR,
-)
+from .geometry import as_point, distance, P
+from .compass import Compass, CompassDrawArc
+from .straightedge import Straightedge, PencilTip, RulerDraw
+from .marks import MarkedPoint, POINT_COLOR
+
+# Palette for construction traces vs. the final highlighted result
+CONSTRUCTION_COLOR = "#5B8FF9"
+CONSTRUCTION_GREEN = "#5AD19A"
+RESULT_COLOR = "#F7D154"
+RESULT_RED = "#FF8A80"
+
+OFFSCREEN = DOWN * 6
 
 
-class StraightedgeCompassScene(Scene):
-    """A :class:`~manim.Scene` extended with ruler-and-compass operations.
+class EuclidScene(Scene):
+    """Scene with built-in compass and straightedge.
 
-    Geometric primitives
-    ---------------------
-    add_point
-        Place and label a point.
-    draw_segment / draw_line
-        Lay the straightedge and draw a segment / extended line.
-    draw_circle / draw_arc
-        Sweep the compass to leave a circle or arc.
+    Typical usage::
 
-    Intersections
-    -------------
-    intersections_of / mark_intersection
-        Solve line-line, line-circle and circle-circle intersections.
-
-    Construction helpers
-    --------------------
-    fade_construction
-        Fade out auxiliary construction objects all at once.
+        class MyConstruction(EuclidScene):
+            def construct(self):
+                A, B = P(-2, 0), P(2, 0)
+                self.mark_point(A, "A"); self.mark_point(B, "B")
+                self.draw_circle(A, through=B)
+                self.draw_circle(B, through=A)
+                C = uppermost(circle_circle_intersection(A, d, B, d))
+                self.mark_point(C, "C")
+                self.draw_segment(A, B)
+                self.draw_segment(A, C)
+                self.draw_segment(B, C)
     """
 
-    # Timing ---------------------------------------------------------------
-    ruler_settle_time: float = 0.7
-    ruler_draw_time: float = 1.1
-    compass_appear_time: float = 0.45
-    compass_angular_speed: float = 2.6  # seconds per full turn
-    point_grow_time: float = 0.35
+    # tool motion timing
+    tool_travel_time = 0.7
+    default_arc_time = 2.4
+    default_segment_time = 1.3
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.construction_mobjects = Group()
-        self.add(self.construction_mobjects)
+    def setup(self):
+        super().setup()
+        self.compass = Compass()
+        self.ruler = Straightedge()
+        self._compass_away = True
+        self._ruler_away = True
 
-    # ------------------------------------------------------------------ #
-    # Points
-    # ------------------------------------------------------------------ #
+    # ------------------------------------------------------------------ marks
 
-    def add_point(self, position, label: str | None = None, *, animate=True, **kwargs):
-        """Place a :class:`MarkedPoint` (grows in by default)."""
-        pt = MarkedPoint(position, label, **kwargs)
-        if animate:
-            self.play(GrowFromCenter(pt), run_time=self.point_grow_time)
-        else:
-            self.add(pt)
-        return pt
+    def intro(self, title: str, font_size: int = 30):
+        """Write a Chinese/English title, then shrink it to the top-left
+        corner so the construction has the whole stage."""
+        text = Text(title, font_size=font_size, color="#D7DEE5")
+        text.to_edge(UP, buff=0.3)
+        self.play(Write(text), run_time=1.2)
+        self.wait(0.3)
+        self.play(text.animate.scale(0.62).to_corner(LEFT + UP, buff=0.25),
+                  run_time=0.6)
+        return text
 
-    # ------------------------------------------------------------------ #
-    # Straightedge
-    # ------------------------------------------------------------------ #
+    def mark_point(self, point, label: str = None, direction=0.42 * UP,
+                   color=POINT_COLOR, radius: float = 0.06,
+                   font_size: int = 34, run_time: float = 0.35):
+        """Drop a coloured marker (and optional label) on a point."""
+        point = as_point(point)
+        marked = MarkedPoint(point, label, direction, color, radius,
+                             font_size)
+        self.play(FadeIn(marked.dot, scale=0.3), run_time=run_time)
+        if marked.label_mob is not None:
+            self.play(Write(marked.label_mob), run_time=0.35)
+        return marked
 
-    def _lay_ruler(self, a, b, run_time):
-        ruler = Straightedge()
-        a, b = geo.P(a), geo.P(b)
-        angle = np.arctan2((b - a)[1], (b - a)[0])
-        # Start resting parallel to the segment, offset to one side.
-        perp = np.array([-np.sin(angle), np.cos(angle), 0.0])
-        ruler.lay_between(a, b)
-        ruler.shift(2.2 * perp)
-        self.play(FadeIn(ruler, shift=-0.6 * perp), run_time=0.4)
-        self.play(ruler.animate.shift(-2.2 * perp), run_time=run_time)
-        return ruler
+    # ---------------------------------------------------------------- compass
 
-    def draw_segment(self, a, b, *, color=RESULT_COLOR, stroke_width=3,
-                     run_time=None, construction=False, **kwargs):
-        """Lay the straightedge along ``a -> b`` and draw the segment."""
-        a, b = geo.P(a), geo.P(b)
-        ruler = self._lay_ruler(a, b, self.ruler_settle_time)
-        line = Line(a, b, color=color, stroke_width=stroke_width, **kwargs)
-        line._sc_geom = ("line", np.array(a), np.array(b))
-        self.play(Create(line), run_time=run_time or self.ruler_draw_time)
-        self.play(FadeOut(ruler), run_time=0.3)
-        if construction:
-            # Create() added the line at scene top level; move it into the
-            # construction group instead, so it lives in exactly one place.
-            if line in self.mobjects:
-                self.remove(line)
-            self.construction_mobjects.add(line)
-        return line
-
-    def draw_line(self, a, b, *, extend: float = 1.0, color=RESULT_COLOR,
-                  stroke_width=2, construction=False, **kwargs):
-        """Draw an *extended* line through ``a`` and ``b``.
-
-        ``extend`` is the extra length (scene units) added at each end.
-        """
-        a, b = geo.P(a), geo.P(b)
-        direction = b - a
-        norm = float(np.linalg.norm(direction))
-        unit = direction / norm
-        ea = a - extend * unit
-        eb = b + extend * unit
-        line = self.draw_segment(
-            ea, eb, color=color, stroke_width=stroke_width, construction=construction, **kwargs
-        )
-        line._sc_geom = ("line", np.array(a), np.array(b))
-        return line
-
-    # ------------------------------------------------------------------ #
-    # Compass
-    # ------------------------------------------------------------------ #
-
-    def compass_sweep(self, center, radius: float, start_angle: float,
-                      sweep_angle: float, *, color=CONSTRUCTION_COLOR,
-                      stroke_width=2, dashed=False, leave=True,
-                      run_time=None, full_circle=False, construction=True):
-        """Animate the compass sweeping an arc (or full circle).
-
-        The returned object is a :class:`~manim.Circle` when ``full_circle``
-        is true (or ``sweep_angle`` is a full turn), otherwise an
-        :class:`~manim.Arc`.
-        """
-        center = geo.P(center)
-        end_angle = start_angle + sweep_angle
-        theta = ValueTracker(start_angle)
-
-        compass = always_redraw(
-            lambda: make_compass_at(center, radius, theta.get_value())
-        )
-        arc = always_redraw(
-            lambda: static_arc(
-                center,
-                radius,
-                start_angle,
-                theta.get_value() - start_angle,
-                color=color,
-                stroke_width=stroke_width,
+    def _bring_compass(self, center, radius, start_angle):
+        center = as_point(center)
+        if self._compass_away:
+            self.compass.pose(center + OFFSCREEN, radius, start_angle)
+            self.add(self.compass)
+            self.play(
+                self.compass.animate.pose(center, radius, start_angle),
+                run_time=self.tool_travel_time,
             )
+            self._compass_away = False
+        else:
+            self.play(
+                self.compass.animate.pose(center, radius, start_angle),
+                run_time=self.tool_travel_time * 0.7,
+            )
+
+    def _retire_compass(self):
+        c = self.compass.center
+        self.play(
+            self.compass.animate.pose(c + OFFSCREEN, self.compass.radius,
+                                      self.compass.start_angle),
+            run_time=self.tool_travel_time * 0.8,
         )
-        self.play(FadeIn(compass), run_time=self.compass_appear_time)
+        self.remove(self.compass)
+        self._compass_away = True
+
+    def draw_arc(self, center, radius: float, start_angle: float = 0.0,
+                 angle: float = TAU, color=CONSTRUCTION_COLOR,
+                 stroke_width: float = 2.0, run_time: float = None,
+                 keep_compass: bool = False):
+        """Sweep an arc with the compass and leave it on the paper."""
+        center = as_point(center)
+        if run_time is None:
+            run_time = self.default_arc_time * abs(angle) / TAU + 0.4
+        self._bring_compass(center, radius, start_angle)
+        arc = Arc(radius=radius, start_angle=start_angle, angle=1e-6,
+                  arc_center=center, stroke_color=color,
+                  stroke_width=stroke_width)
         self.add(arc)
-        sweep_time = run_time or max(
-            0.8, abs(sweep_angle) / TAU * self.compass_angular_speed
+        self.play(
+            CompassDrawArc(self.compass, arc, angle),
+            run_time=run_time, rate_func=linear,
         )
-        self.play(theta.animate.set_value(end_angle), run_time=sweep_time)
-        self.play(FadeOut(compass), run_time=0.3)
+        if not keep_compass:
+            self._retire_compass()
+        return arc
 
-        if not leave:
-            self.remove(arc)
-            return None
-
-        # Replace the redrawn arc with a static object.
-        self.remove(arc)
-        if full_circle or abs(abs(sweep_angle) - TAU) < 1e-6:
-            static = Circle(radius=radius, color=color, stroke_width=stroke_width)
-            static.move_to(center)
-        else:
-            static = static_arc(
-                center, radius, start_angle, sweep_angle,
-                color=color, stroke_width=stroke_width,
-            )
-        if dashed:
-            static = DashedVMobject(static, num_dashes=40)
-        static._sc_geom = ("circle", np.array(center), float(radius))
-        if construction:
-            self.construction_mobjects.add(static)
-        else:
-            self.add(static)
-        return static
-
-    def draw_circle(self, center, through=None, *, radius: float | None = None,
-                    color=CONSTRUCTION_COLOR, stroke_width=2, dashed=False,
-                    run_time=None, construction=True):
-        """Draw a full circle, defined by center and either a point or radius."""
-        center = geo.P(center)
+    def draw_circle(self, center, through=None, radius: float = None,
+                    color=CONSTRUCTION_COLOR, stroke_width: float = 2.0,
+                    run_time: float = None, start_angle: float = 0.0):
+        """Draw a full circle, either with explicit radius or radius equal to
+        the distance ``center -> through`` (compass picks up that length)."""
         if radius is None:
             if through is None:
-                raise ValueError("draw_circle requires either 'through' or 'radius'")
-            radius = geo.dist(center, through)
-        return self.compass_sweep(
-            center, radius, start_angle=0.0, sweep_angle=TAU,
-            color=color, stroke_width=stroke_width, dashed=dashed,
-            run_time=run_time, full_circle=True, construction=construction,
-        )
+                raise ValueError("provide either radius= or through=")
+            radius = distance(center, through)
+        return self.draw_arc(center, radius, start_angle=start_angle,
+                            angle=TAU, color=color,
+                            stroke_width=stroke_width, run_time=run_time)
 
-    def draw_arc(self, center, radius: float, start_angle: float,
-                 sweep_angle: float, *, color=CONSTRUCTION_COLOR,
-                 stroke_width=2, construction=True, **kwargs):
-        """Draw a circular arc with the compass."""
-        return self.compass_sweep(
-            center, radius, start_angle, sweep_angle,
-            color=color, stroke_width=stroke_width,
-            construction=construction, **kwargs,
-        )
+    # ------------------------------------------------------------ straightedge
 
-    # ------------------------------------------------------------------ #
-    # Intersections
-    # ------------------------------------------------------------------ #
+    def _bring_ruler(self, p1, p2):
+        p1, p2 = as_point(p1), as_point(p2)
+        if self._ruler_away:
+            self.ruler.pose(p1 + OFFSCREEN, p2 + OFFSCREEN)
+            self.add(self.ruler)
+            self.play(self.ruler.animate.pose(p1, p2),
+                      run_time=self.tool_travel_time)
+            self._ruler_away = False
+        else:
+            self.play(self.ruler.animate.pose(p1, p2),
+                      run_time=self.tool_travel_time * 0.7)
 
-    def _geom_of(self, mobject):
-        if hasattr(mobject, "_sc_geom"):
-            return mobject._sc_geom
-        if isinstance(mobject, Circle):
-            return ("circle", mobject.get_center(), float(mobject.radius))
-        if isinstance(mobject, Line):
-            return ("line", mobject.get_start(), mobject.get_end())
-        raise TypeError(f"Cannot extract geometry from {mobject}")
+    def _retire_ruler(self):
+        p1, p2 = self._ruler_endpoints
+        self.play(self.ruler.animate.pose(p1 + OFFSCREEN, p2 + OFFSCREEN),
+                  run_time=self.tool_travel_time * 0.8)
+        self.remove(self.ruler)
+        self._ruler_away = True
 
-    def intersections_of(self, o1, o2):
-        """All intersection points of two drawn lines/circles/arcs."""
-        kind1, *g1 = self._geom_of(o1)
-        kind2, *g2 = self._geom_of(o2)
-        if kind1 == "line" and kind2 == "line":
-            pt = geo.line_line_intersection(*g1, *g2)
-            return [pt] if pt is not None else []
-        if kind1 == "circle" and kind2 == "circle":
-            return geo.circle_circle_intersection(g1[0], g1[1], g2[0], g2[1])
-        # Mixed line / circle.
-        if kind1 == "line":
-            return geo.line_circle_intersection(*g1, g2[0], g2[1])
-        return geo.line_circle_intersection(*g2, g1[0], g1[1])
+    def retire_ruler(self):
+        """Send the ruler offstage after a run of keep_ruler segments."""
+        self._retire_ruler()
 
-    def mark_intersection(self, o1, o2, *, which: int = 0,
-                          label: str | None = None, **kwargs):
-        """Compute an intersection and mark it with a :class:`MarkedPoint`.
+    def draw_segment(self, p1, p2, color=RESULT_COLOR, stroke_width: float = 4,
+                     run_time: float = None, keep_ruler: bool = False,
+                     tip_fade: float = 0.25):
+        """Lay the ruler along p1p2 and draw the segment with a pencil.
 
-        ``which`` selects among the (up to two) intersections.  Keyword
-        arguments are forwarded to :class:`MarkedPoint`.
+        Pass ``keep_ruler=True`` for consecutive segments: the ruler stays on
+        stage and merely re-aligns, which reads as drawing a polygon side by
+        side; call :meth:`retire_ruler` after the last one.
         """
-        pts = self.intersections_of(o1, o2)
-        if not pts:
-            raise ValueError("The two objects do not intersect")
-        if which >= len(pts):
-            raise IndexError(
-                f"Intersection index {which} out of range (found {len(pts)})"
-            )
-        return self.add_point(pts[which], label, **kwargs)
-
-    # ------------------------------------------------------------------ #
-    # Bookkeeping
-    # ------------------------------------------------------------------ #
-
-    def fade_construction(self, *extra, run_time: float = 1.0):
-        """Fade out every auxiliary object drawn with ``construction=True``."""
-        anims = []
-        if len(self.construction_mobjects) > 0:
-            anims.append(FadeOut(self.construction_mobjects))
-        anims.extend(FadeOut(e) for e in extra)
-        if anims:
-            self.play(*anims, run_time=run_time)
-        self.remove(self.construction_mobjects)
-        self.construction_mobjects = Group()
-        self.add(self.construction_mobjects)
-
-    def emphasize(self, *mobjects, color="#FFD166", width=5, run_time=0.8):
-        """Temporarily highlight result objects, then restore their style."""
-        originals = [(m, m.get_color(), m.get_stroke_width()) for m in mobjects]
+        p1, p2 = as_point(p1), as_point(p2)
+        self._ruler_endpoints = (p1, p2)
+        if run_time is None:
+            run_time = self.default_segment_time
+        self._bring_ruler(p1, p2)
+        line = Line(p1, p1, color=color, stroke_width=stroke_width,
+                    z_index=8)
+        tip = PencilTip(p1)
+        self.add(line, tip)
         self.play(
-            *[m.animate.set_stroke(color=color, width=width) for m in mobjects],
-            run_time=run_time,
+            RulerDraw(line, tip, p1, p2),
+            run_time=run_time, rate_func=linear,
         )
-        self.play(
-            *[m.animate.set_stroke(color=c, width=w) for m, c, w in originals],
-            run_time=run_time,
-        )
+        self.play(FadeOut(tip, scale=0.4), run_time=tip_fade)
+        if not keep_ruler:
+            self._retire_ruler()
+        return line
+
+    # --------------------------------------------------------------- utilities
+
+    def flash_points(self, *points, color=RESULT_COLOR):
+        """Briefly emphasise already-computed points."""
+        dots = [MarkedPoint(as_point(q), color=color, radius=0.08).dot
+                for q in points]
+        for d in dots:
+            self.add(d)
+        self.play(*[FadeOut(d, scale=2.2) for d in dots], run_time=0.7)

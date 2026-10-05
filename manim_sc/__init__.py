@@ -1,69 +1,46 @@
-"""manim-sc: a straightedge-and-compass construction plugin for Manim.
+"""manim-straightedge-compass: animated straightedge-and-compass
+constructions for Manim.
 
-Example
--------
-.. code-block:: python
+Public API
+----------
+Geometry
+~~~~~~~~
+P, distance, midpoint, angle_of, unit, point_on,
+circle_circle_intersection, line_line_intersection,
+circle_line_intersection, uppermost, lowermost, leftmost, rightmost, other
 
-    from manim import *
-    from manim_sc import StraightedgeCompassScene
+Tools
+~~~~~
+Compass, CompassDrawArc, Straightedge, PencilTip, RulerDraw, MarkedPoint
 
-    class Equilateral(StraightedgeCompassScene):
-        def construct(self):
-            A = self.add_point(2 * LEFT, "A")
-            B = self.add_point(2 * RIGHT, "B")
-            self.equilateral_triangle(A, B)
-            self.fade_construction()
+Scene base class
+~~~~~~~~~~~~~~~~
+EuclidScene, with helpers mark_point / draw_circle / draw_arc / draw_segment.
 """
-
-from __future__ import annotations
-
-from . import geometry
-from .marks import MarkedPoint
-from .tools import (
-    Straightedge,
-    Compass,
-    make_compass_at,
-    static_arc,
-    RULER_COLOR,
-    COMPASS_COLOR,
-    CONSTRUCTION_COLOR,
-    RESULT_COLOR,
+from .geometry import (
+    P, distance, midpoint, angle_of, unit, rotate_vec, point_on,
+    circle_circle_intersection, line_line_intersection,
+    circle_line_intersection,
+    uppermost, lowermost, leftmost, rightmost, other,
 )
-from .scene import StraightedgeCompassScene
-from . import constructions
-
-__version__ = "0.1.0"
+from .compass import Compass, CompassDrawArc
+from .straightedge import Straightedge, PencilTip, RulerDraw
+from .marks import MarkedPoint, POINT_COLOR
+from .scene import (
+    EuclidScene,
+    CONSTRUCTION_COLOR, CONSTRUCTION_GREEN,
+    RESULT_COLOR, RESULT_RED,
+)
 
 __all__ = [
-    "geometry",
-    "MarkedPoint",
-    "Straightedge",
-    "Compass",
-    "make_compass_at",
-    "static_arc",
-    "StraightedgeCompassScene",
-    "constructions",
-    "RULER_COLOR",
-    "COMPASS_COLOR",
-    "CONSTRUCTION_COLOR",
-    "RESULT_COLOR",
-    "__version__",
+    "P", "distance", "midpoint", "angle_of", "unit", "rotate_vec",
+    "point_on", "circle_circle_intersection", "line_line_intersection",
+    "circle_line_intersection", "uppermost", "lowermost", "leftmost",
+    "rightmost", "other",
+    "Compass", "CompassDrawArc", "Straightedge", "PencilTip", "RulerDraw",
+    "MarkedPoint", "POINT_COLOR",
+    "EuclidScene", "CONSTRUCTION_COLOR", "CONSTRUCTION_GREEN",
+    "RESULT_COLOR", "RESULT_RED",
 ]
 
-
-# Bind every construction as a convenience method on the scene class.
-def _bind_as_method(fn):
-    def method(self, *args, **kwargs):
-        return fn(self, *args, **kwargs)
-
-    method.__name__ = fn.__name__
-    method.__doc__ = fn.__doc__
-    return method
-
-
-for _name in dir(constructions):
-    if _name.startswith("_"):
-        continue
-    _fn = getattr(constructions, _name)
-    if callable(_fn):
-        setattr(StraightedgeCompassScene, _name, _bind_as_method(_fn))
+__version__ = "0.1.1"

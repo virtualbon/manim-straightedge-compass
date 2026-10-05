@@ -1,55 +1,38 @@
-"""Marked points used in straightedge-and-compass constructions."""
-
+"""Point markers and labels."""
 from __future__ import annotations
 
 import numpy as np
-from manim import Dot, Text, VGroup, DOWN
+from manim import Dot, MathTex, Text, VGroup, UP
 
-from .geometry import P
+from .geometry import as_point
+
+POINT_COLOR = "#FF6B6B"
+LABEL_COLOR = "#F2F5F9"
 
 
 class MarkedPoint(VGroup):
-    """A small dot with an optional text label.
+    """A coloured dot with an optional math label."""
 
-    Parameters
-    ----------
-    position
-        Location of the point (anything accepted by :func:`geometry.P`).
-    label
-        Optional label rendered with :class:`manim.Text` (no LaTeX required).
-    label_buff
-        Distance between the dot and the label.
-    label_dir
-        Direction in which the label is placed relative to the dot.
-    """
-
-    def __init__(
-        self,
-        position,
-        label: str | None = None,
-        *,
-        radius: float = 0.045,
-        color="#E84A5F",
-        label_buff: float = 0.12,
-        label_dir=DOWN,
-        font_size: int = 26,
-        **kwargs,
-    ):
+    def __init__(self, point, label: str = None,
+                 direction=0.42 * UP, color=POINT_COLOR,
+                 radius: float = 0.06, font_size: int = 34, **kwargs):
         super().__init__(**kwargs)
-        self.pt: np.ndarray = P(position)
-        self.dot = Dot(self.pt, radius=radius, color=color)
+        point = as_point(point)
+        self.dot = Dot(point, radius=radius, color=color, z_index=15)
         self.add(self.dot)
+        self.label_mob = None
         if label is not None:
-            self.label = Text(label, font_size=font_size, color="#F5F5F5")
-            self.label.next_to(self.dot, label_dir, buff=label_buff)
-            self.add(self.label)
-        else:
-            self.label = None
+            self.label_mob = MathTex(label, font_size=font_size,
+                                     color=LABEL_COLOR, z_index=15)
+            d = np.asarray(direction, dtype=float)
+            n = np.linalg.norm(d[:2])
+            if n > 0:
+                d = d / n
+                self.label_mob.move_to(point + d * (radius + 0.28))
+            else:
+                self.label_mob.next_to(self.dot, UP, buff=0.12)
+            self.add(self.label_mob)
 
-    def get_position(self) -> np.ndarray:
-        return self.pt
-
-    # Allows ``np.asarray(marked_point)`` to yield the geometric location, so
-    # Manim calls such as ``move_to(marked_point)`` work naturally.
-    def __array__(self, dtype=None):
-        return np.asarray(self.pt, dtype=dtype)
+    @property
+    def point(self):
+        return self.dot.get_center()
